@@ -1,0 +1,268 @@
+import sqlite3
+import tkinter as tk
+from tkinter import ttk, messagebox
+from datetime import datetime
+
+# Matplotlib embedding for Tkinter
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+DB_NAME = "grocery_manager.db"
+
+# ----------------- DATABASE SETUP -----------------
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cur = conn.cursor()
+    # Inventory Table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL,
+            stock REAL NOT NULL,
+            unit TEXT NOT NULL,
+            unit_price REAL NOT NULL
+        )
+    """)
+    # Monthly Consumption Logs Table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS consumption_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_name TEXT NOT NULL,
+            quantity REAL NOT NULL,
+            cost REAL NOT NULL,
+            log_date TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+# ----------------- MAIN APPLICATION -----------------
+class BigBasketManager(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("BigBasket Grocery Stock & Monthly Consumption Manager")
+        self.geometry("980x680")
+        self.minsize(900, 600)
+
+        # Tabbed interface
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        self.tab_inventory = ttk.Frame(notebook)
+        self.tab_consume = ttk.Frame(notebook)
+        self.tab_analytics = ttk.Frame(notebook)
+
+        notebook.add(self.tab_inventory, text="📦 Inventory Management")
+        notebook.add(self.tab_consume, text="📉 Record Consumption")
+        notebook.add(self.tab_analytics, text="📊 Analytics & Reports")
+
+        self.build_inventory_tab()
+        self.build_consume_tab()
+        self.build_analytics_tab()
+
+    # ---------- TAB 1: INVENTORY MANAGEMENT ----------
+    def build_inventory_tab(self):
+        form_frame = ttk.LabelFrame(self.tab_inventory, text="Add / Restock Grocery Item", padding=10)
+        form_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(form_frame, text="Item Name:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.ent_inv_name = ttk.Entry(form_frame, width=20)
+        self.ent_inv_name.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Category:").grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+        self.cmb_inv_cat = ttk.Combobox(form_frame, values=["Fruits & Veggies", "Dairy & Bakery", "Atta, Rice & Dal", "Snacks & Drinks", "Spices & Oils"], width=18)
+        self.cmb_inv_cat.current(0)
+        self.cmb_inv_cat.grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Stock:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        self.ent_inv_qty = ttk.Entry(form_frame, width=20)
+        self.ent_inv_qty.grid(row=1, column=1, padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Unit:").grid(row=1, column=2, padx=5, pady=5, sticky=tk.W)
+        self.cmb_inv_unit = ttk.Combobox(form_frame, values=["kg", "g", "litre", "packet", "piece"], width=18)
+        self.cmb_inv_unit.current(0)
+        self.cmb_inv_unit.grid(row=1, column=3, padx=5, pady=5)
+
+        ttk.Label(form_frame, text="Price/Unit (₹):").grid(row=2, column=0, padx=5, pady=5, sticky=tk.W)
+        self.ent_inv_price = ttk.Entry(form_frame, width=20)
+        self.ent_inv_price.grid(row=2, column=1, padx=5, pady=5)
+
+        btn_save = ttk.Button(form_frame, text="Add / Update Item", command=self.save_inventory_item)
+        btn_save.grid(row=2, column=3, pady=5, sticky=tk.E)
+
+        # Inventory Table
+        table_frame = ttk.Frame(self.tab_inventory)
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        self.tree_inv = ttk.Treeview(table_frame, columns=("ID", "Name", "Category", "Stock", "Unit", "Price"), show="headings")
+        for col in ("ID", "Name", "Category", "Stock", "Unit", "Price"):
+            self.tree_inv.heading(col, text=col)
+            self.tree_inv.column(col, anchor=tk.CENTER)
+
+        scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree_inv.yview)
+        self.tree_inv.configure(yscrollcommand=scroll.set)
+        self.tree_inv.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.refresh_inventory_table()
+
+    def save_inventory_item(self):
+        name = self.ent_inv_name.get().strip()
+        cat = self.cmb_inv_cat.get()
+        unit = self.cmb_inv_unit.get()
+        try:
+            qty = float(self.ent_inv_qty.get())
+            price = float(self.ent_inv_price.get())
+        except ValueError:
+            messagebox.showerror("Error", "Stock and Price must be valid numbers.")
+            return
+
+        if not name:
+            messagebox.showerror("Error", "Item Name cannot be empty.")
+            return
+
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        cur.execute("SELECT id, stock FROM inventory WHERE LOWER(name) = LOWER(?)", (name,))
+        existing = cur.fetchone()
+
+        if existing:
+            new_stock = existing[1] + qty
+            cur.execute("UPDATE inventory SET stock = ?, unit_price = ?, category = ?, unit = ? WHERE id = ?",
+                        (new_stock, price, cat, unit, existing[0]))
+            messagebox.showinfo("Success", f"Stock updated! New total: {new_stock} {unit}")
+        else:
+            cur.execute("INSERT INTO inventory (name, category, stock, unit, unit_price) VALUES (?, ?, ?, ?, ?)",
+                        (name, cat, qty, unit, price))
+            messagebox.showinfo("Success", "Item added to inventory.")
+
+        conn.commit()
+        conn.close()
+        self.refresh_inventory_table()
+
+    def refresh_inventory_table(self):
+        for row in self.tree_inv.get_children():
+            self.tree_inv.delete(row)
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, category, stock, unit, unit_price FROM inventory")
+        for item in cur.fetchall():
+            self.tree_inv.insert("", tk.END, values=item)
+        conn.close()
+
+    # ---------- TAB 2: RECORD CONSUMPTION ----------
+    def build_consume_tab(self):
+        frame = ttk.LabelFrame(self.tab_consume, text="Log Grocery Usage", padding=15)
+        frame.pack(fill=tk.X, padx=10, pady=10)
+
+        ttk.Label(frame, text="Select Item:").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.cmb_consume_item = ttk.Combobox(frame, width=25, state="readonly")
+        self.cmb_consume_item.grid(row=0, column=1, padx=5, pady=5)
+
+        ttk.Label(frame, text="Quantity Used:").grid(row=1, column=0, padx=5, pady=5, sticky=tk.W)
+        self.ent_consume_qty = ttk.Entry(frame, width=27)
+        self.ent_consume_qty.grid(row=1, column=1, padx=5, pady=5)
+
+        btn_consume = ttk.Button(frame, text="Log Consumption", command=self.record_consumption)
+        btn_consume.grid(row=2, column=1, pady=10, sticky=tk.E)
+
+        # Refresh combobox items when opened
+        self.cmb_consume_item.bind("<FocusIn>", lambda e: self.load_consume_dropdown())
+        self.load_consume_dropdown()
+
+    def load_consume_dropdown(self):
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        cur.execute("SELECT name, stock, unit FROM inventory WHERE stock > 0")
+        items = [f"{row[0]} (Avail: {row[1]} {row[2]})" for row in cur.fetchall()]
+        self.cmb_consume_item["values"] = items
+        conn.close()
+
+    def record_consumption(self):
+        selection = self.cmb_consume_item.get()
+        if not selection:
+            messagebox.showerror("Error", "Please select an item.")
+            return
+
+        item_name = selection.split(" (Avail:")[0].strip()
+        try:
+            used_qty = float(self.ent_consume_qty.get())
+        except ValueError:
+            messagebox.showerror("Error", "Enter a valid quantity.")
+            return
+
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        cur.execute("SELECT stock, unit_price FROM inventory WHERE name = ?", (item_name,))
+        data = cur.fetchone()
+
+        if not data or data[0] < used_qty:
+            messagebox.showerror("Error", "Insufficient stock available.")
+            conn.close()
+            return
+
+        current_stock, price_per_unit = data[0], data[1]
+        cost = used_qty * price_per_unit
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        cur.execute("UPDATE inventory SET stock = ? WHERE name = ?", (current_stock - used_qty, item_name))
+        cur.execute("INSERT INTO consumption_logs (item_name, quantity, cost, log_date) VALUES (?, ?, ?, ?)",
+                    (item_name, used_qty, cost, today))
+
+        conn.commit()
+        conn.close()
+
+        messagebox.showinfo("Logged", f"Logged {used_qty} consumption. Cost: ₹{cost:.2f}")
+        self.ent_consume_qty.delete(0, tk.END)
+        self.load_consume_dropdown()
+        self.refresh_inventory_table()
+
+    # ---------- TAB 3: MATPLOTLIB ANALYTICS ----------
+    def build_analytics_tab(self):
+        btn_bar = ttk.Button(self.tab_analytics, text="Generate Monthly Spending & Consumption Chart", command=self.plot_monthly_chart)
+        btn_bar.pack(pady=10)
+
+        self.chart_container = ttk.Frame(self.tab_analytics)
+        self.chart_container.pack(fill=tk.BOTH, expand=True)
+
+    def plot_monthly_chart(self):
+        # Clear existing canvas widgets
+        for widget in self.chart_container.winfo_children():
+            widget.destroy()
+
+        conn = sqlite3.connect(DB_NAME)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT item_name, SUM(cost) 
+            FROM consumption_logs 
+            WHERE strftime('%Y-%m', log_date) = strftime('%Y-%m', 'now') 
+            GROUP BY item_name
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
+            lbl = ttk.Label(self.chart_container, text="No consumption recorded for this month yet.")
+            lbl.pack(pady=20)
+            return
+
+        items = [r[0] for r in rows]
+        costs = [r[1] for r in rows]
+
+        # Create Matplotlib Figure
+        fig, ax = plt.subplots(figsize=(7, 4), dpi=100)
+        ax.bar(items, costs, color="#4CAF50")
+        ax.set_ylabel("Monthly Cost (₹)")
+        ax.set_title("Current Month Grocery Consumption Breakdown")
+        fig.tight_layout()
+
+        # Embed into Tkinter
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+if __name__ == "__main__":
+    init_db()
+    app = BigBasketManager()
+    app.mainloop()
